@@ -152,6 +152,10 @@ async function fetchWithTimeout(url, options = {}, timeout = 1000 * 60 * 2) {
   }
 }
 
+// Configuration
+const PDF_CACHE_DURATION = 3600; // 1 hour in seconds (adjust based on update frequency)
+const API_CACHE_DURATION = 300;  // 5 minutes in seconds
+
 // Cache for transformed Google Drive links (in-memory for worker lifetime)
 const linkCache = new Map();
 
@@ -205,12 +209,18 @@ function formatDateDDMMYYYY(date) {
   return `${dd}/${mm}/${yyyy}`;
 }
 
-// Compiled regex patterns (compiled once, reused many times for better performance)
+// Regex pattern strings (create new instances for each use to avoid concurrency issues)
 const REGEX_PATTERNS = {
   epaperwave: /<p[^>]*class=["']has-text-align-center["'][^>]*><b>\s*([\d]{1,2}[-\s]\w+[-\s]\d{4}):\s*<a[^>]+href=["']([^"']+drive\.google\.com\/file\/d\/[^"']+\/view[^"']+)["'][^>]*>.*?<\/a><\/b><\/p>/gi,
   dailyepaperStandard: /<p[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4}):\s*<a[^>]+href=["']([^"']+drive\.google\.com\/file\/d\/[^"']+\/view[^"']+)["'][^>]*>Download Now<\/a>/gi,
   dailyepaperDual: /<p[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4}):.*?-\s*<a[^>]+>English<\/a>/gi
 };
+
+// Helper function to create fresh regex instances (avoids concurrency issues in Workers)
+function getRegex(patternName) {
+  const pattern = REGEX_PATTERNS[patternName];
+  return new RegExp(pattern.source, pattern.flags);
+}
 
 async function getLatestDateForPaper(paper) {
   let paperDates = [];
@@ -223,19 +233,18 @@ async function getLatestDateForPaper(paper) {
       const dates = [];
       
       if (linkInfo.source === "epaperwave") {
-        // Reset regex lastIndex for reuse
-        REGEX_PATTERNS.epaperwave.lastIndex = 0;
+        const regex = getRegex('epaperwave');
         let match;
-        while ((match = REGEX_PATTERNS.epaperwave.exec(html)) !== null) {
+        while ((match = regex.exec(html)) !== null) {
           const dateObj = parseDateString(match[1].trim());
           if (!isNaN(dateObj.getTime()) && dateObj.getDay() !== 0) {
             dates.push(dateObj);
           }
         }
       } else if (linkInfo.source === "dailyepaper") {
-        REGEX_PATTERNS.dailyepaperStandard.lastIndex = 0;
+        const regexStandard = getRegex('dailyepaperStandard');
         let match, foundMatch = false;
-        while ((match = REGEX_PATTERNS.dailyepaperStandard.exec(html)) !== null) {
+        while ((match = regexStandard.exec(html)) !== null) {
           const dateObj = new Date(match[1].trim());
           if (!isNaN(dateObj)) {
             dates.push(dateObj);
@@ -243,8 +252,8 @@ async function getLatestDateForPaper(paper) {
           }
         }
         if (!foundMatch) {
-          REGEX_PATTERNS.dailyepaperDual.lastIndex = 0;
-          while ((match = REGEX_PATTERNS.dailyepaperDual.exec(html)) !== null) {
+          const regexDual = getRegex('dailyepaperDual');
+          while ((match = regexDual.exec(html)) !== null) {
             const dateObj = new Date(match[1].trim());
             if (!isNaN(dateObj)) {
               dates.push(dateObj);
@@ -513,8 +522,14 @@ async function handleReader(request, host, paperCode) {
     const pagesContainer = document.getElementById("pagesContainer");
     const globalSpinner = document.getElementById("globalSpinner");
     
-    // Use streaming loading for better perceived performance
-    const loadingTask = pdfjsLib.getDocument({ url: pdfUrl, disableAutoFetch: true, disableStream: false });
+    // Configure PDF.js for progressive loading with range requests
+    // disableAutoFetch: true - prevents downloading entire PDF upfront
+    // disableStream: false - enables streaming/range requests for better performance
+    const loadingTask = pdfjsLib.getDocument({ 
+      url: pdfUrl, 
+      disableAutoFetch: true, 
+      disableStream: false 
+    });
     
     loadingTask.promise.then(function(pdf) {
       pdfDoc = pdf;
@@ -619,24 +634,24 @@ async function handleDownload(request, host, paperCode) {
       const links = [];
       
       if (linkInfo.source === "epaperwave") {
-        REGEX_PATTERNS.epaperwave.lastIndex = 0;
+        const regex = getRegex('epaperwave');
         let match;
-        while ((match = REGEX_PATTERNS.epaperwave.exec(html)) !== null) {
+        while ((match = regex.exec(html)) !== null) {
           const dateObj = parseDateString(match[1].trim());
           if (!isNaN(dateObj.getTime()) && dateObj.getDay() !== 0) {
             links.push({ date: dateObj, driveViewLink: match[2].trim(), source: linkInfo.source });
           }
         }
       } else if (linkInfo.source === "dailyepaper") {
-        REGEX_PATTERNS.dailyepaperStandard.lastIndex = 0;
+        const regexStandard = getRegex('dailyepaperStandard');
         let foundMatch = false, match;
-        while ((match = REGEX_PATTERNS.dailyepaperStandard.exec(html)) !== null) {
+        while ((match = regexStandard.exec(html)) !== null) {
           links.push({ date: new Date(match[1].trim()), driveViewLink: match[2].trim(), source: linkInfo.source });
           foundMatch = true;
         }
         if (!foundMatch) {
-          REGEX_PATTERNS.dailyepaperDual.lastIndex = 0;
-          while ((match = REGEX_PATTERNS.dailyepaperDual.exec(html)) !== null) {
+          const regexDual = getRegex('dailyepaperDual');
+          while ((match = regexDual.exec(html)) !== null) {
             links.push({ date: new Date(match[1].trim()), driveViewLink: match[2].trim(), source: linkInfo.source });
           }
         }
@@ -667,7 +682,7 @@ async function handleDownload(request, host, paperCode) {
     // Stream the response for better performance and lower memory usage
     const headers = new Headers({ 
       "Content-Type": "application/pdf",
-      "Cache-Control": "public, max-age=3600", // Cache for 1 hour
+      "Cache-Control": `public, max-age=${PDF_CACHE_DURATION}`,
       "Accept-Ranges": "bytes"
     });
     
@@ -710,7 +725,7 @@ async function handleApiLatest(request, paperCode) {
   const cachedResponse = await cache.match(cacheKey);
   if (cachedResponse) return cachedResponse;
   const apiResponse = new Response(JSON.stringify({ latestDate: dateText }), { headers });
-  apiResponse.headers.append("Cache-Control", "public, max-age=300");
+  apiResponse.headers.append("Cache-Control", `public, max-age=${API_CACHE_DURATION}`);
   await cache.put(cacheKey, apiResponse.clone());
   return apiResponse;
 }
@@ -763,7 +778,7 @@ async function handleApiLatestBatch(request) {
     const resultObj = Object.fromEntries(results);
     const headers = new Headers({ 
       "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=300"
+      "Cache-Control": `public, max-age=${API_CACHE_DURATION}`
     });
     
     return new Response(JSON.stringify(resultObj), { headers });
