@@ -132,7 +132,7 @@ const newspapers = [
     "name": "The Pioneer",
     "language": "English",
     "homepage": "https://www.dailypioneer.com/",
-    "logo": "https://cdn.brandfetch.io/idNVYewHJq/w/371/h/70/theme/dark/logo.png?c=1dxbfHSJFAPEGdCLU4o5B",
+    "logo": "https://www.dailypioneer.com/images/new-logo.png",
     "links": [
       { "source": "dailyepaper", "url": "https://www.dailyepaper.in/pioneer-epaper/" }
     ]
