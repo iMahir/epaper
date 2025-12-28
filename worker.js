@@ -210,10 +210,19 @@ function formatDateDDMMYYYY(date) {
 }
 
 // Regex pattern strings (create new instances for each use to avoid concurrency issues)
+// Updated patterns to be more flexible and handle website structure changes
 const REGEX_PATTERNS = {
-  epaperwave: /<p[^>]*class=["']has-text-align-center["'][^>]*><b>\s*([\d]{1,2}[-\s]\w+[-\s]\d{4}):\s*<a[^>]+href=["']([^"']+drive\.google\.com\/file\/d\/[^"']+\/view[^"']+)["'][^>]*>.*?<\/a><\/b><\/p>/gi,
-  dailyepaperStandard: /<p[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4}):\s*<a[^>]+href=["']([^"']+drive\.google\.com\/file\/d\/[^"']+\/view[^"']+)["'][^>]*>Download Now<\/a>/gi,
-  dailyepaperDual: /<p[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4}):.*?-\s*<a[^>]+>English<\/a>/gi
+  // Updated: handles both <b> and <strong>, doesn't require /view in URL, more flexible with whitespace
+  epaperwave: /<(?:b|strong)[^>]*>\s*([\d]{1,2}[-\s]\w+[-\s]\d{4})[^<]*:\s*<a[^>]+href=["']([^"']*drive\.google\.com\/file\/d\/[^"'\/]+)[^"']*["'][^>]*>[^<]*<\/a>\s*<\/(?:b|strong)>/gi,
+  
+  // Updated: handles "Download Now", "Download", "Click Here" variations, doesn't require /view
+  dailyepaperStandard: /<p[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4})[^<]*:\s*<a[^>]+href=["']([^"']*drive\.google\.com\/file\/d\/[^"'\/]+)[^"']*["'][^>]*>(?:Download|Click)[^<]*<\/a>/gi,
+  
+  // Updated: captures the actual Google Drive link for dual-language papers
+  dailyepaperDual: /<p[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4})[^<]*:.*?<a[^>]+href=["']([^"']*drive\.google\.com\/file\/d\/[^"'\/]+)[^"']*["'][^>]*>English<\/a>/gi,
+  
+  // New: fallback pattern for table-based layouts
+  epaperwave_table: /<t[dr][^>]*>\s*(?:<[^>]+>)*\s*([\d]{1,2}[-\s]\w+[-\s]\d{4})[^<]*:\s*<a[^>]+href=["']([^"']*drive\.google\.com\/file\/d\/[^"'\/]+)[^"']*["'][^>]*>[^<]*<\/a>/gi
 };
 
 // Helper function to create fresh regex instances (avoids concurrency issues in Workers)
@@ -233,12 +242,23 @@ async function getLatestDateForPaper(paper) {
       const dates = [];
       
       if (linkInfo.source === "epaperwave") {
+        // Try standard pattern first
         const regex = getRegex('epaperwave');
         let match;
         while ((match = regex.exec(html)) !== null) {
           const dateObj = parseDateString(match[1].trim());
           if (!isNaN(dateObj.getTime()) && dateObj.getDay() !== 0) {
             dates.push(dateObj);
+          }
+        }
+        // If no matches, try table-based pattern as fallback
+        if (dates.length === 0) {
+          const regexTable = getRegex('epaperwave_table');
+          while ((match = regexTable.exec(html)) !== null) {
+            const dateObj = parseDateString(match[1].trim());
+            if (!isNaN(dateObj.getTime()) && dateObj.getDay() !== 0) {
+              dates.push(dateObj);
+            }
           }
         }
       } else if (linkInfo.source === "dailyepaper") {
@@ -282,10 +302,22 @@ function transformGoogleDriveLink(viewLink) {
     return linkCache.get(viewLink);
   }
   
-  const match = viewLink.match(/\/file\/d\/([^/]+)\/view/);
   let result;
+  // Try to extract file ID from various Google Drive URL formats
+  // Format 1: /file/d/{fileId}/view
+  let match = viewLink.match(/\/file\/d\/([^/?]+)(?:\/view)?/);
   if (match) {
     result = `https://drive.google.com/uc?export=download&id=${match[1]}&authuser=0`;
+  } else if (viewLink.includes('drive.google.com/file/d/')) {
+    // Format 2: Already contains file/d/ but might be partial URL
+    // Extract everything after file/d/ up to the next / or end of string
+    const parts = viewLink.split('/file/d/')[1];
+    const fileId = parts ? parts.split(/[/?]/)[0] : null;
+    if (fileId) {
+      result = `https://drive.google.com/uc?export=download&id=${fileId}&authuser=0`;
+    } else {
+      result = viewLink;
+    }
   } else {
     result = viewLink;
   }
@@ -634,12 +666,23 @@ async function handleDownload(request, host, paperCode) {
       const links = [];
       
       if (linkInfo.source === "epaperwave") {
+        // Try standard pattern first
         const regex = getRegex('epaperwave');
         let match;
         while ((match = regex.exec(html)) !== null) {
           const dateObj = parseDateString(match[1].trim());
           if (!isNaN(dateObj.getTime()) && dateObj.getDay() !== 0) {
             links.push({ date: dateObj, driveViewLink: match[2].trim(), source: linkInfo.source });
+          }
+        }
+        // If no matches, try table-based pattern as fallback
+        if (links.length === 0) {
+          const regexTable = getRegex('epaperwave_table');
+          while ((match = regexTable.exec(html)) !== null) {
+            const dateObj = parseDateString(match[1].trim());
+            if (!isNaN(dateObj.getTime()) && dateObj.getDay() !== 0) {
+              links.push({ date: dateObj, driveViewLink: match[2].trim(), source: linkInfo.source });
+            }
           }
         }
       } else if (linkInfo.source === "dailyepaper") {
