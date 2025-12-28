@@ -211,8 +211,8 @@ function formatDateDDMMYYYY(date) {
 
 // Regex pattern strings (create new instances for each use to avoid concurrency issues)
 const REGEX_PATTERNS = {
-  // Updated epaperwave pattern: more flexible with tags and classes, handles URLs with or without /view
-  epaperwave: /<(?:p|div)[^>]*>(?:<(?:b|strong)[^>]*>)?\s*([\d]{1,2}[-\s]\w+[-\s]\d{4}):\s*<a[^>]+href=["']([^"']*drive\.google\.com\/(?:file\/d\/)?[A-Za-z0-9_-]+(?:\/view)?[^"']*)["'][^>]*>.*?<\/a>(?:<\/(?:b|strong)>)?<\/(?:p|div)>/gi,
+  // Updated epaperwave pattern based on actual HTML structure: <p class="has-text-align-center"><b>DD-MM-YYYY: </b><strong><a href="...">
+  epaperwave: /<p[^>]*class=["'][^"']*has-text-align-center[^"']*["'][^>]*>\s*<b>\s*([\d]{1,2}-[\d]{1,2}-\d{4}):\s*<\/b>\s*<strong>\s*<a[^>]+href=["']([^"']*drive\.google\.com\/file\/d\/[A-Za-z0-9_-]+\/view[^"']*)["'][^>]*>/gi,
   // Updated dailyepaper pattern: handles "Download Now", "Download", "Click Here", etc.
   dailyepaperStandard: /<(?:p|div)[^>]*>\s*<span[^>]*>\s*([\d]{1,2}\s+\w+\s+\d{4}):\s*<a[^>]+href=["']([^"']*drive\.google\.com\/(?:file\/d\/)?[A-Za-z0-9_-]+(?:\/view)?[^"']*)["'][^>]*>(?:Download Now|Download|Click Here)<\/a>/gi,
   // Updated dailyepaperDual pattern: actually captures the Google Drive link
